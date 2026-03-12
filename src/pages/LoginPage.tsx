@@ -50,11 +50,13 @@ const LoginPage = () => {
       <div className="relative z-10 w-full max-w-sm mx-4 animate-slide-up">
         <div className="glass-card rounded-2xl p-8 text-center">
           {/* Logo */}
-          <div className="flex items-center justify-center gap-3 mb-2">
-            <Shield className="w-8 h-8 text-primary-foreground" />
-            <img src={securepayLogo} alt="SecurePay" className="h-14 object-contain" />
+          <div className="flex justify-center items-center gap-2 mb-2">
+             <div className="bg-primary/20 p-2 rounded-xl">
+               <Shield className="w-8 h-8 text-primary" />
+             </div>
+             <img src={securepayLogo} alt="SecurePay" className="h-[3.25rem] object-contain object-left scale-110 ml-1 translate-y-[2px]" />
           </div>
-          <p className="text-primary-foreground/70 text-sm mb-8">Secure Banking and Payments</p>
+          <p className="text-primary-foreground/70 text-sm mb-8 mt-4 font-medium tracking-wide">Secure Banking</p>
 
           {/* PIN Dots */}
           <div className={`flex justify-center gap-4 mb-2 ${shake ? "animate-shake" : ""}`}
