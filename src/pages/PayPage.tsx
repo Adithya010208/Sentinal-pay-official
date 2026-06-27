@@ -2,15 +2,107 @@ import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import DashboardLayout from "@/components/DashboardLayout";
 import { BankStatus, simulateBankStatus, calculateRisk, RiskAnalysis, generateTxnId, BANKS } from "@/lib/bankData";
-import { Send, AlertTriangle, Shield, CheckCircle, XCircle, Lock, Delete } from "lucide-react";
+import { Send, AlertTriangle, Shield, CheckCircle, XCircle, Lock, Delete, QrCode, Scan, Camera, Upload, ArrowLeft, RefreshCw, FileText, Check } from "lucide-react";
+import { toast } from "sonner";
 import upiLogo from "@/assets/upi-logo.png";
 import paymentSuccessImg from "@/assets/payment-success.png";
 
-type PayStep = "form" | "risk" | "upi-pin" | "biometric" | "processing" | "result" | "scratch";
+type PayStep = "form" | "risk" | "upi-pin" | "biometric" | "processing" | "result" | "scratch" | "qr-scanner" | "qr-analysis";
+
+interface QRPreset {
+  id: string;
+  name: string;
+  upiId: string;
+  amount: string;
+  trustStatus: "trusted" | "suspicious" | "blocked" | "unverified";
+  trustScore: number;
+  message: string;
+  merchantVerified: boolean;
+  logs: string[];
+}
+
+const QR_PRESETS: QRPreset[] = [
+  {
+    id: "trusted",
+    name: "Vellamal Education Trust",
+    upiId: "vellamal@sbi",
+    amount: "5000",
+    trustStatus: "trusted",
+    trustScore: 98,
+    message: "Verified Trusted Merchant. Match found in official Central Education Trust Registry. PSP gateway digital signature verified.",
+    merchantVerified: true,
+    logs: [
+      "[INFO] Decoding scanned QR payload...",
+      "[SUCCESS] UPI URL syntax validated successfully.",
+      "[INFO] Querying National Zero-Trust Merchant Index...",
+      "[SUCCESS] Merchant verified: VELLAMAL EDUCATION TRUST",
+      "[INFO] Checking PSP host signature reputation...",
+      "[SUCCESS] Domain sbi.com verified. Certificate valid.",
+      "[SUCCESS] Zero-Trust evaluation complete. Score: 98%. Safe source."
+    ]
+  },
+  {
+    id: "suspicious",
+    name: "Vellamal Trust",
+    upiId: "vella-finance@okicici",
+    amount: "5000",
+    trustStatus: "suspicious",
+    trustScore: 42,
+    message: "Spoofing Alert. The merchant name claims to be 'Vellamal Trust', but the payment destination is 'vella-finance@okicici'. This naming mismatch is a common phishing indicator.",
+    merchantVerified: false,
+    logs: [
+      "[INFO] Decoding scanned QR payload...",
+      "[SUCCESS] UPI URL syntax validated.",
+      "[INFO] Querying National Zero-Trust Merchant Index...",
+      "[WARN] Unregistered merchant. No certified trust record found.",
+      "[ALERT] Flagged: QR name 'Vellamal Trust' mismatch with UPI ID PSP registration.",
+      "[INFO] Assessing domain reputation for okicici...",
+      "[WARN] Threat score: 42%. Spoofing pattern detected."
+    ]
+  },
+  {
+    id: "blocked",
+    name: "SecurePay Rewards Office",
+    upiId: "securepay-rewards-claim@central-psp",
+    amount: "12500",
+    trustStatus: "blocked",
+    trustScore: 12,
+    message: "Security Threat. This UPI ID is blacklisted on the global SecurePay Threat Registry for active phishing and fraud campaigns. Proceeding is disallowed.",
+    merchantVerified: false,
+    logs: [
+      "[INFO] Decoding scanned QR payload...",
+      "[SUCCESS] UPI URL syntax validated.",
+      "[INFO] Querying National Zero-Trust Merchant Index...",
+      "[CRITICAL] MATCH FOUND: Address is in the Global Threat Blocklist (ID: BL-4821)",
+      "[ALERT] Severity level: Critical. Associated with phishing lottery scams.",
+      "[CRITICAL] Zero-Trust evaluation complete. Score: 12%. Blocked."
+    ]
+  },
+  {
+    id: "unverified",
+    name: "Adithya Kumar",
+    upiId: "adithya.kumar@paytm",
+    amount: "",
+    trustStatus: "unverified",
+    trustScore: 75,
+    message: "Standard Peer-to-Peer account. No merchant registration details found. No suspicious history has been reported on this address.",
+    merchantVerified: false,
+    logs: [
+      "[INFO] Decoding scanned QR payload...",
+      "[SUCCESS] UPI URL syntax validated.",
+      "[INFO] Querying National Zero-Trust Merchant Index...",
+      "[INFO] P2P Node detected. Standard peer account.",
+      "[INFO] Checking threat registry status...",
+      "[SUCCESS] Clean record. No reports found.",
+      "[SUCCESS] Verification complete. Score: 75%. P2P receiver."
+    ]
+  }
+];
 
 const PayPage = () => {
   const navigate = useNavigate();
   const [step, setStep] = useState<PayStep>("form");
+  const [formType, setFormType] = useState<"manual" | "qr">("manual");
   const [recipient, setRecipient] = useState("");
   const [upiId, setUpiId] = useState("");
   const [amount, setAmount] = useState("");
@@ -25,20 +117,68 @@ const PayPage = () => {
     const prizes = ["₹10 Cashback", "₹25 Cashback", "₹50 Cashback", "Better Luck Next Time", "₹5 Cashback", "₹100 Cashback"];
     return prizes[Math.floor(Math.random() * prizes.length)];
   });
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Zero-Trust QR states
+  const [selectedQr, setSelectedQr] = useState<QRPreset | null>(null);
+  const [analysisLogs, setAnalysisLogs] = useState<string[]>([]);
+  const [logIndex, setLogIndex] = useState(0);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [qrBadgeInfo, setQrBadgeInfo] = useState<{ status: string; score: number } | null>(null);
 
   useEffect(() => {
     const interval = setInterval(() => setBankStatuses(simulateBankStatus()), 5000);
     return () => clearInterval(interval);
   }, []);
 
+  // Zero-Trust QR Logs Printing animation
+  useEffect(() => {
+    if (isAnalyzing && selectedQr) {
+      if (logIndex < selectedQr.logs.length) {
+        const timeout = setTimeout(() => {
+          setAnalysisLogs((prev) => [...prev, selectedQr.logs[logIndex]]);
+          setLogIndex((idx) => idx + 1);
+        }, 400);
+        return () => clearTimeout(timeout);
+      } else {
+        setIsAnalyzing(false);
+        if (selectedQr.trustStatus === "trusted") {
+          toast.success("QR Trust Verified: Vellamal Education Trust");
+        } else if (selectedQr.trustStatus === "suspicious") {
+          toast.warning("Merchant Identity Mismatch Detected!");
+        } else if (selectedQr.trustStatus === "blocked") {
+          toast.error("Threat Detected: UPI address blacklisted!");
+        }
+      }
+    }
+  }, [isAnalyzing, selectedQr, logIndex]);
+
   const currentBank = bankStatuses.find((b) => b.id === selectedBank);
   const bankWarning = currentBank && currentBank.status === "down";
+
+  const startQRAnalysis = (preset: QRPreset) => {
+    setSelectedQr(preset);
+    setAnalysisLogs([]);
+    setLogIndex(0);
+    setIsAnalyzing(true);
+    setStep("qr-analysis");
+  };
 
   const handleAnalyze = () => {
     if (!recipient || !upiId || !amount) return;
     const bank = bankStatuses.find((b) => b.id === selectedBank);
     const risk = calculateRisk(Number(amount), bank?.status || "operational");
+    
+    // Inject QR Specific analysis risk scores into general risk engine
+    if (upiId === "vella-finance@okicici") {
+      risk.fraudRiskScore = Math.max(risk.fraudRiskScore, 65);
+      risk.decision = "quarantine";
+      risk.recommendation = "Behavioral alert: High probability of impersonation spoofing. QR metadata mismatch. Proceeding requires biometric lock release.";
+    } else if (upiId === "securepay-rewards-claim@central-psp") {
+      risk.fraudRiskScore = 95;
+      risk.decision = "block";
+      risk.recommendation = "Zero-Trust Security Block: The destination UPI address is flagged on the global fraud registry. Transaction terminated.";
+    }
+
     setRiskAnalysis(risk);
     setStep("risk");
   };
@@ -103,11 +243,23 @@ const PayPage = () => {
   return (
     <DashboardLayout>
       <div className="max-w-lg mx-auto animate-fade-in">
+        {/* Style block for QR camera laser scan animation */}
+        <style>{`
+          @keyframes scan-move {
+            0% { top: 10%; }
+            50% { top: 90%; }
+            100% { top: 10%; }
+          }
+          .animate-scan {
+            animation: scan-move 3s ease-in-out infinite;
+          }
+        `}</style>
+
         {/* Session Micro-Lock Gauge */}
         <div className="flex items-center justify-between bg-muted/30 p-4 rounded-xl border border-border box-shadow-sm mb-6">
           <div className="flex items-center gap-3">
              <div className={`w-10 h-10 rounded-full flex items-center justify-center transition-colors ${sessionRisk > 80 ? 'bg-danger/10' : 'bg-primary/10'}`}>
-               <Shield className={`w-5 h-5 ${sessionRisk > 80 ? 'text-danger animate-pulse' : 'text-primary'}`} />
+                <Shield className={`w-5 h-5 ${sessionRisk > 80 ? 'text-danger animate-pulse' : 'text-primary'}`} />
              </div>
              <div>
                <p className="text-xs font-semibold text-foreground tracking-wide uppercase">Live Session Security</p>
@@ -126,10 +278,59 @@ const PayPage = () => {
 
         {step === "form" && (
           <div className="stat-card space-y-5">
-            <div className="flex items-center gap-2 mb-2">
-              <Send className="w-5 h-5 text-primary" />
-              <h2 className="text-xl font-bold text-foreground">Send Money</h2>
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <Send className="w-5 h-5 text-primary" />
+                <h2 className="text-xl font-bold text-foreground">Send Money</h2>
+              </div>
+              <span className="text-xs text-muted-foreground font-semibold bg-primary/10 text-primary px-2.5 py-1 rounded-full flex items-center gap-1">
+                <Shield className="w-3.5 h-3.5" /> Zero-Trust Active
+              </span>
             </div>
+
+            {/* Toggle form entry mode */}
+            <div className="grid grid-cols-2 gap-2 p-1 bg-muted rounded-xl">
+              <button
+                onClick={() => setFormType("manual")}
+                className={`py-2 text-xs font-semibold rounded-lg transition-all ${
+                  formType === "manual" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Manual Transfer
+              </button>
+              <button
+                onClick={() => {
+                  setFormType("qr");
+                  setStep("qr-scanner");
+                }}
+                className={`py-2 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                  formType === "qr" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <QrCode className="w-4 h-4" /> Scan / Upload QR
+              </button>
+            </div>
+
+            {formType === "qr" && qrBadgeInfo && (
+              <div className={`p-3 rounded-lg border text-xs flex items-center justify-between ${
+                qrBadgeInfo.status === "trusted" ? "bg-success/5 border-success/20 text-success" :
+                qrBadgeInfo.status === "unverified" ? "bg-muted border-border text-muted-foreground" :
+                "bg-warning/5 border-warning/20 text-warning"
+              }`}>
+                <div className="flex items-center gap-2">
+                  <Shield className="w-4 h-4" />
+                  <span>QR Verifier: <strong className="capitalize">{qrBadgeInfo.status}</strong> Partner (Score: {qrBadgeInfo.score}%)</span>
+                </div>
+                <button
+                  onClick={() => {
+                    setStep("qr-scanner");
+                  }}
+                  className="font-bold underline hover:opacity-85"
+                >
+                  Rescan
+                </button>
+              </div>
+            )}
 
             <div className="space-y-4">
               <div>
@@ -174,6 +375,248 @@ const PayPage = () => {
                 {sessionRisk > 80 ? <><Lock className="w-4 h-4"/> Session Locked - High Risk</> : "Analyze & Pay"}
               </button>
             </div>
+          </div>
+        )}
+
+        {/* QR Code Scanner Step */}
+        {step === "qr-scanner" && (
+          <div className="stat-card space-y-5">
+            <div className="flex items-center gap-2 mb-2">
+              <button onClick={() => setStep("form")} className="hover:bg-muted p-1.5 rounded-lg transition-colors">
+                <ArrowLeft className="w-5 h-5 text-foreground" />
+              </button>
+              <h2 className="text-xl font-bold text-foreground">Zero-Trust QR Scanner</h2>
+            </div>
+
+            {/* Pulsing simulated camera scanner */}
+            <div className="relative w-64 h-64 mx-auto border border-border bg-black/5 rounded-2xl overflow-hidden shadow-inner flex items-center justify-center">
+              {/* Corner brackets */}
+              <div className="absolute top-4 left-4 w-6 h-6 border-t-2 border-l-2 border-primary rounded-tl" />
+              <div className="absolute top-4 right-4 w-6 h-6 border-t-2 border-r-2 border-primary rounded-tr" />
+              <div className="absolute bottom-4 left-4 w-6 h-6 border-b-2 border-l-2 border-primary rounded-bl" />
+              <div className="absolute bottom-4 right-4 w-6 h-6 border-b-2 border-r-2 border-primary rounded-br" />
+
+              {/* Glowing animated scanner laser line */}
+              <div className="absolute left-0 right-0 h-0.5 bg-primary/80 shadow-[0_0_12px_rgba(59,130,246,0.9)] animate-scan" />
+              
+              {/* Overlay camera Grid lines */}
+              <div className="absolute inset-0 opacity-5 bg-[linear-gradient(to_right,#808080_1px,transparent_1px),linear-gradient(to_bottom,#808080_1px,transparent_1px)] bg-[size:20px_20px]" />
+              
+              <div className="text-center p-4 relative z-10 space-y-2 select-none">
+                <Camera className="w-10 h-10 text-primary/40 mx-auto animate-pulse" />
+                <span className="text-xs text-muted-foreground font-mono block">Align QR inside frame</span>
+              </div>
+            </div>
+
+            {/* Presets Grid */}
+            <div className="space-y-3">
+              <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider text-center">Simulation Targets (Click to scan)</p>
+              <div className="grid grid-cols-2 gap-2.5">
+                {QR_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    onClick={() => startQRAnalysis(preset)}
+                    className="flex flex-col items-start p-3 bg-muted/40 border border-border hover:border-primary/40 hover:bg-muted/70 rounded-xl text-left transition-all"
+                  >
+                    <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                      {preset.trustStatus === "trusted" ? "✅" : preset.trustStatus === "suspicious" ? "⚠️" : preset.trustStatus === "blocked" ? "🚫" : "👤"}
+                      {preset.name.split(" ")[0]}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground truncate w-full font-mono mt-0.5">{preset.upiId}</span>
+                    <div className="flex items-center justify-between w-full mt-2">
+                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                        preset.trustStatus === "trusted" ? "bg-success/15 text-success" :
+                        preset.trustStatus === "suspicious" ? "bg-warning/15 text-warning" :
+                        preset.trustStatus === "blocked" ? "bg-danger/15 text-danger" : "bg-zinc-200 text-zinc-700"
+                      }`}>
+                        {preset.trustStatus.toUpperCase()}
+                      </span>
+                      <span className="text-[10px] font-mono font-semibold text-foreground/80">{preset.trustScore}% Score</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* File Upload Zone */}
+            <div className="relative border border-dashed border-border hover:border-primary/50 rounded-xl p-4 text-center cursor-pointer transition-all bg-muted/10 hover:bg-muted/20">
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => {
+                  if (e.target.files && e.target.files.length > 0) {
+                    const randomPreset = QR_PRESETS[Math.floor(Math.random() * QR_PRESETS.length)];
+                    toast.info(`Scanning image: ${e.target.files[0].name}`);
+                    startQRAnalysis({
+                      ...randomPreset,
+                      name: "Scanned File QR",
+                    });
+                  }
+                }}
+                className="absolute inset-0 opacity-0 cursor-pointer"
+              />
+              <Upload className="w-5 h-5 text-muted-foreground mx-auto mb-1" />
+              <p className="text-xs font-medium text-foreground">Upload QR Code Image</p>
+              <p className="text-[10px] text-muted-foreground mt-0.5">Simulate scanning by importing QR files</p>
+            </div>
+
+            <button onClick={() => setStep("form")}
+              className="w-full py-2.5 border border-border rounded-lg text-sm font-semibold text-foreground hover:bg-muted transition-colors">
+              Cancel & Manual Entry
+            </button>
+          </div>
+        )}
+
+        {/* QR Code Analysis Step */}
+        {step === "qr-analysis" && selectedQr && (
+          <div className="stat-card space-y-5">
+            <div className="flex items-center gap-3 border-b border-border pb-3">
+              <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary shrink-0 relative">
+                {isAnalyzing ? (
+                  <span className="absolute inset-0 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+                ) : (
+                  <Shield className="w-5 h-5" />
+                )}
+                <QrCode className="w-5 h-5 absolute" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-foreground">Zero-Trust QR Evaluation</h3>
+                <p className="text-xs text-muted-foreground">Evaluating integrity and registration metrics</p>
+              </div>
+            </div>
+
+            {/* Analysis Logs Console */}
+            <div className="bg-zinc-950 text-emerald-400 p-4 rounded-xl font-mono text-xs space-y-1.5 max-h-48 overflow-y-auto border border-zinc-800 shadow-inner">
+              {analysisLogs.map((log, index) => (
+                <div key={index} className="animate-fade-in tracking-wide leading-relaxed">
+                  {log.startsWith("[CRITICAL]") ? (
+                    <span className="text-red-500 font-bold">{log}</span>
+                  ) : log.startsWith("[WARN]") || log.startsWith("[ALERT]") ? (
+                    <span className="text-amber-500 font-semibold">{log}</span>
+                  ) : log.startsWith("[SUCCESS]") ? (
+                    <span className="text-emerald-400 font-semibold">{log}</span>
+                  ) : (
+                    <span className="text-zinc-400">{log}</span>
+                  )}
+                </div>
+              ))}
+              {isAnalyzing && (
+                <div className="flex items-center gap-1">
+                  <span className="w-2 h-4 bg-emerald-400 animate-pulse inline-block" />
+                  <span className="text-[10px] text-zinc-500 italic">processing...</span>
+                </div>
+              )}
+            </div>
+
+            {/* Evaluation Results (only show after logs finish printing) */}
+            {!isAnalyzing && (
+              <div className="animate-fade-in space-y-4 pt-2">
+                {/* Shield score indicator */}
+                <div className="flex items-center gap-4 bg-muted/20 p-4 rounded-xl border border-border/80">
+                  <div className="relative w-16 h-16 shrink-0 flex items-center justify-center">
+                    <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
+                      <path className="text-border" strokeWidth="3" stroke="currentColor" fill="none" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                      <path className={`transition-all duration-1000 ${
+                        selectedQr.trustStatus === "trusted" ? "text-success" :
+                        selectedQr.trustStatus === "suspicious" ? "text-warning" :
+                        selectedQr.trustStatus === "blocked" ? "text-danger" : "text-slate-400"
+                      }`} strokeWidth="3" strokeDasharray={`${selectedQr.trustScore}, 100`} strokeLinecap="round" stroke="currentColor" fill="none" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                    </svg>
+                    <span className="absolute text-sm font-bold font-mono text-foreground">{selectedQr.trustScore}%</span>
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-sm text-foreground flex items-center gap-1.5">
+                      {selectedQr.trustStatus === "trusted" && <><span className="text-success">✔</span> Verified Trusted Partner</>}
+                      {selectedQr.trustStatus === "suspicious" && <><span className="text-warning">⚠</span> Security Warning</>}
+                      {selectedQr.trustStatus === "blocked" && <><span className="text-danger">🚫</span> High Risk Blocked</>}
+                      {selectedQr.trustStatus === "unverified" && <><span className="text-muted-foreground">ℹ</span> Unverified P2P Receiver</>}
+                    </h4>
+                    <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{selectedQr.message}</p>
+                  </div>
+                </div>
+
+                {/* Receiver Info */}
+                <div className="bg-muted/40 rounded-xl p-3.5 space-y-2 border border-border/50 text-xs">
+                  <div className="flex justify-between"><span className="text-muted-foreground">Merchant Target:</span> <span className="font-semibold text-foreground">{selectedQr.name}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Payment Handle:</span> <span className="font-mono font-semibold text-foreground">{selectedQr.upiId}</span></div>
+                  {selectedQr.amount && (
+                    <div className="flex justify-between"><span className="text-muted-foreground">Requested Amount:</span> <span className="font-semibold text-foreground">₹{Number(selectedQr.amount).toLocaleString()}</span></div>
+                  )}
+                </div>
+
+                {/* Decisions and Actions */}
+                <div className="flex gap-3 pt-2">
+                  {selectedQr.trustStatus === "blocked" ? (
+                    <>
+                      <button onClick={() => {
+                        setStep("form");
+                        setFormType("manual");
+                      }} className="flex-1 py-2.5 rounded-lg border border-border text-xs font-semibold hover:bg-muted transition-all">
+                        Back to Safety
+                      </button>
+                      <button onClick={() => {
+                        toast.success("Fraudulent QR details reported to Central Cyber Cell Registry.");
+                      }} className="flex-1 py-2.5 bg-danger text-danger-foreground text-xs font-semibold rounded-lg hover:bg-danger/90 transition-all">
+                        Report Fraud Address
+                      </button>
+                    </>
+                  ) : selectedQr.trustStatus === "suspicious" ? (
+                    <>
+                      <button onClick={() => {
+                        setStep("form");
+                        setFormType("manual");
+                      }} className="flex-1 py-2.5 rounded-lg border border-border text-xs font-semibold hover:bg-muted transition-all">
+                        Cancel Payment
+                      </button>
+                      <button onClick={() => {
+                        // Bypass directly to biometric release
+                        setRecipient(selectedQr.name);
+                        setUpiId(selectedQr.upiId);
+                        setAmount(selectedQr.amount);
+                        setQrBadgeInfo({ status: "suspicious", score: selectedQr.trustScore });
+                        const bank = bankStatuses.find((b) => b.id === selectedBank);
+                        setRiskAnalysis({
+                          fraudRiskScore: 68,
+                          failureProbability: 10,
+                          networkStrength: "strong",
+                          bankServerStatus: bank?.status || "operational",
+                          geoRisk: 10,
+                          velocityRisk: 5,
+                          deviceRisk: 5,
+                          amountRisk: 10,
+                          networkRisk: 5,
+                          behaviorRisk: 30,
+                          decision: "quarantine",
+                          recommendation: "Spoofing warning bypass: requires user biometric authentication confirmation."
+                        });
+                        setStep("biometric");
+                      }} className="flex-1 py-2.5 bg-warning text-warning-foreground text-xs font-bold rounded-lg hover:bg-warning/90 transition-all flex items-center justify-center gap-1.5 animate-pulse">
+                        <Lock className="w-3.5 h-3.5" /> Force Biometric Release
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button onClick={() => setStep("qr-scanner")}
+                        className="flex-1 py-2.5 rounded-lg border border-border text-xs font-semibold hover:bg-muted transition-all">
+                        Rescan
+                      </button>
+                      <button onClick={() => {
+                        setRecipient(selectedQr.name);
+                        setUpiId(selectedQr.upiId);
+                        if (selectedQr.amount) {
+                          setAmount(selectedQr.amount);
+                        }
+                        setQrBadgeInfo({ status: selectedQr.trustStatus, score: selectedQr.trustScore });
+                        setFormType("qr");
+                        setStep("form");
+                      }} className="flex-1 py-2.5 bg-primary text-primary-foreground text-xs font-semibold rounded-lg hover:bg-primary/90 transition-all">
+                        Autofill & Proceed
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
